@@ -2,21 +2,38 @@
 For companies that need SSO, user management and professional support for LiteLLM Proxy
 
 :::info
-
+Interested in Enterprise? Schedule a meeting with us here 👉
 [Talk to founders](https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat)
 
 :::
 
 This covers: 
-- ✅ **Features under the [LiteLLM Commercial License (Content Mod, Custom Tags, etc.)](https://docs.litellm.ai/docs/proxy/enterprise)**
-- ✅ [**Secure UI access with Single Sign-On**](../docs/proxy/ui.md#setup-ssoauth-for-ui)
-- ✅ [**JWT-Auth**](../docs/proxy/token_auth.md)
-- ✅ [**Prompt Injection Detection**](#prompt-injection-detection-lakeraai)
-- ✅ [**Invite Team Members to access `/spend` Routes**](../docs/proxy/cost_tracking#allowing-non-proxy-admins-to-access-spend-endpoints)
+- **Enterprise Features**
+    - **Security**
+        - ✅ [SSO for Admin UI](./proxy/ui#✨-enterprise-features)
+        - ✅ [Audit Logs with retention policy](./proxy/enterprise#audit-logs)
+        - ✅ [JWT-Auth](../docs/proxy/token_auth.md)
+        - ✅ [Control available public, private routes](./proxy/enterprise#control-available-public-private-routes)
+        - ✅ [[BETA] AWS Key Manager v2 - Key Decryption](./proxy/enterprise#beta-aws-key-manager---key-decryption)
+        - ✅ [Use LiteLLM keys/authentication on Pass Through Endpoints](./proxy/pass_through#✨-enterprise---use-litellm-keysauthentication-on-pass-through-endpoints)
+        - ✅ [Enforce Required Params for LLM Requests (ex. Reject requests missing ["metadata"]["generation_name"])](./proxy/enterprise#enforce-required-params-for-llm-requests)
+    - **Spend Tracking**
+        - ✅ [Tracking Spend for Custom Tags](./proxy/enterprise#tracking-spend-for-custom-tags)
+        - ✅ [API Endpoints to get Spend Reports per Team, API Key, Customer](./proxy/cost_tracking.md#✨-enterprise-api-endpoints-to-get-spend)
+    - **Guardrails, PII Masking, Content Moderation**
+        - ✅ [Content Moderation with LLM Guard, LlamaGuard, Secret Detection, Google Text Moderations](./proxy/enterprise#content-moderation)
+        - ✅ [Prompt Injection Detection (with LakeraAI API)](./proxy/enterprise#prompt-injection-detection---lakeraai)
+        - ✅ Reject calls from Blocked User list 
+        - ✅ Reject calls (incoming / outgoing) with Banned Keywords (e.g. competitors)
+    - **Custom Branding**
+        - ✅ [Custom Branding + Routes on Swagger Docs](./proxy/enterprise#swagger-docs---custom-routes--branding)
+        - ✅ [Public Model Hub](../docs/proxy/enterprise.md#public-model-hub)
+        - ✅ [Custom Email Branding](../docs/proxy/email.md#customizing-email-branding)
 - ✅ **Feature Prioritization**
 - ✅ **Custom Integrations**
 - ✅ **Professional Support - Dedicated discord + slack**
-- ✅ **Custom SLAs**
+
+
 
 
 ## [COMING SOON] AWS Marketplace Support
@@ -33,7 +50,11 @@ Includes all enterprise features.
 
 Professional Support can assist with LLM/Provider integrations, deployment, upgrade management, and LLM Provider troubleshooting.  We can’t solve your own infrastructure-related issues but we will guide you to fix them.
 
-We offer custom SLAs based on your needs and the severity of the issue. The standard SLA is 6 hours for Sev0-Sev1 severity and 24h for Sev2-Sev3 between 7am – 7pm PT (Monday through Saturday).
+- 1 hour for Sev0 issues
+- 6 hours for Sev1
+- 24h for Sev2-Sev3 between 7am – 7pm PT (Monday through Saturday)
+
+**We can offer custom SLAs** based on your needs and the severity of the issue
 
 ### What’s the cost of the Self-Managed Enterprise edition?
 

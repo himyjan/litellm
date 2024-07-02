@@ -1,31 +1,30 @@
+import json
+import re
+import traceback
+import uuid
+import xml.etree.ElementTree as ET
 from enum import Enum
-import requests, traceback
-import json, re, xml.etree.ElementTree as ET
-from jinja2 import Template, exceptions, meta, BaseLoader
+from typing import Any, List, Mapping, MutableMapping, Optional, Sequence, Tuple
+
+import requests
+from jinja2 import BaseLoader, Template, exceptions, meta
 from jinja2.sandbox import ImmutableSandboxedEnvironment
-from typing import (
-    Any,
-    List,
-    Mapping,
-    MutableMapping,
-    Optional,
-    Sequence,
-)
+
 import litellm
 import litellm.types
-from litellm.types.completion import (
-    ChatCompletionUserMessageParam,
-    ChatCompletionSystemMessageParam,
-    ChatCompletionMessageParam,
-    ChatCompletionFunctionMessageParam,
-    ChatCompletionMessageToolCallParam,
-    ChatCompletionToolMessageParam,
-)
 import litellm.types.llms
-from litellm.types.llms.anthropic import *
-import uuid
-
 import litellm.types.llms.vertex_ai
+from litellm.types.completion import (
+    ChatCompletionFunctionMessageParam,
+    ChatCompletionMessageParam,
+    ChatCompletionMessageToolCallParam,
+    ChatCompletionSystemMessageParam,
+    ChatCompletionToolMessageParam,
+    ChatCompletionUserMessageParam,
+)
+from litellm.types.llms.anthropic import *
+from litellm.types.llms.bedrock import MessageBlock as BedrockMessageBlock
+from litellm.types.utils import GenericImageParsingChunk
 
 
 def default_pt(messages):
@@ -173,14 +172,35 @@ def ollama_pt(
                             images.append(base64_image)
         return {"prompt": prompt, "images": images}
     else:
-        prompt = "".join(
-            (
-                m["content"]
-                if isinstance(m["content"], str) is str
-                else "".join(m["content"])
-            )
-            for m in messages
-        )
+        prompt = ""
+        for message in messages:
+            role = message["role"]
+            content = message.get("content", "")
+
+            if "tool_calls" in message:
+                tool_calls = []
+
+                for call in message["tool_calls"]:
+                    call_id: str = call["id"]
+                    function_name: str = call["function"]["name"]
+                    arguments = json.loads(call["function"]["arguments"])
+
+                    tool_calls.append(
+                        {
+                            "id": call_id,
+                            "type": "function",
+                            "function": {"name": function_name, "arguments": arguments},
+                        }
+                    )
+
+                prompt += f"### Assistant:\nTool Calls: {json.dumps(tool_calls, indent=2)}\n\n"
+
+            elif "tool_call_id" in message:
+                prompt += f"### User:\n{message['content']}\n\n"
+
+            elif content:
+                prompt += f"### {role.capitalize()}:\n{content}\n\n"
+
     return prompt
 
 
@@ -629,8 +649,9 @@ def construct_tool_use_system_prompt(
 
 
 def convert_url_to_base64(url):
-    import requests
     import base64
+
+    import requests
 
     for _ in range(3):
         try:
@@ -642,26 +663,30 @@ def convert_url_to_base64(url):
         image_bytes = response.content
         base64_image = base64.b64encode(image_bytes).decode("utf-8")
 
-        img_type = url.split(".")[-1].lower()
-        if img_type == "jpg" or img_type == "jpeg":
-            img_type = "image/jpeg"
-        elif img_type == "png":
-            img_type = "image/png"
-        elif img_type == "gif":
-            img_type = "image/gif"
-        elif img_type == "webp":
-            img_type = "image/webp"
+        image_type = response.headers.get("Content-Type", None)
+        if image_type is not None and image_type.startswith("image/"):
+            img_type = image_type
         else:
-            raise Exception(
-                f"Error: Unsupported image format. Format={img_type}. Supported types = ['image/jpeg', 'image/png', 'image/gif', 'image/webp']"
-            )
+            img_type = url.split(".")[-1].lower()
+            if img_type == "jpg" or img_type == "jpeg":
+                img_type = "image/jpeg"
+            elif img_type == "png":
+                img_type = "image/png"
+            elif img_type == "gif":
+                img_type = "image/gif"
+            elif img_type == "webp":
+                img_type = "image/webp"
+            else:
+                raise Exception(
+                    f"Error: Unsupported image format. Format={img_type}. Supported types = ['image/jpeg', 'image/png', 'image/gif', 'image/webp']"
+                )
 
         return f"data:{img_type};base64,{base64_image}"
     else:
         raise Exception(f"Error: Unable to fetch image from URL. url={url}")
 
 
-def convert_to_anthropic_image_obj(openai_image_url: str):
+def convert_to_anthropic_image_obj(openai_image_url: str) -> GenericImageParsingChunk:
     """
     Input:
     "image_url": "data:image/jpeg;base64,{base64_image}",
@@ -682,11 +707,11 @@ def convert_to_anthropic_image_obj(openai_image_url: str):
         # Infer image format from the URL
         image_format = openai_image_url.split("data:image/")[1].split(";base64,")[0]
 
-        return {
-            "type": "base64",
-            "media_type": f"image/{image_format}",
-            "data": base64_data,
-        }
+        return GenericImageParsingChunk(
+            type="base64",
+            media_type=f"image/{image_format}",
+            data=base64_data,
+        )
     except Exception as e:
         if "Error: Unable to fetch image from URL" in str(e):
             raise e
@@ -710,7 +735,7 @@ def convert_to_anthropic_tool_result_xml(message: dict) -> str:
 
     """
     Anthropic tool_results look like:
-    
+
     [Successful results]
     <function_results>
     <result>
@@ -833,7 +858,7 @@ def anthropic_messages_pt_xml(messages: list):
             )  # either string or none
             if messages[msg_i].get(
                 "tool_calls", []
-            ):  # support assistant tool invoke convertion
+            ):  # support assistant tool invoke conversion
                 assistant_text += convert_to_anthropic_tool_invoke_xml(  # type: ignore
                     messages[msg_i]["tool_calls"]
                 )
@@ -1224,7 +1249,7 @@ def anthropic_messages_pt(messages: list):
 
             if messages[msg_i].get(
                 "tool_calls", []
-            ):  # support assistant tool invoke convertion
+            ):  # support assistant tool invoke conversion
                 assistant_content.extend(
                     convert_to_anthropic_tool_invoke(messages[msg_i]["tool_calls"])
                 )
@@ -1460,9 +1485,7 @@ def _load_image_from_url(image_url):
     try:
         from PIL import Image
     except:
-        raise Exception(
-            "gemini image conversion failed please run `pip install Pillow`"
-        )
+        raise Exception("image conversion failed please run `pip install Pillow`")
     from io import BytesIO
 
     try:
@@ -1613,6 +1636,385 @@ def azure_text_pt(messages: list):
     return prompt
 
 
+###### AMAZON BEDROCK #######
+
+from litellm.types.llms.bedrock import ContentBlock as BedrockContentBlock
+from litellm.types.llms.bedrock import ImageBlock as BedrockImageBlock
+from litellm.types.llms.bedrock import ImageSourceBlock as BedrockImageSourceBlock
+from litellm.types.llms.bedrock import ToolBlock as BedrockToolBlock
+from litellm.types.llms.bedrock import (
+    ToolChoiceValuesBlock as BedrockToolChoiceValuesBlock,
+)
+from litellm.types.llms.bedrock import ToolConfigBlock as BedrockToolConfigBlock
+from litellm.types.llms.bedrock import (
+    ToolInputSchemaBlock as BedrockToolInputSchemaBlock,
+)
+from litellm.types.llms.bedrock import ToolResultBlock as BedrockToolResultBlock
+from litellm.types.llms.bedrock import (
+    ToolResultContentBlock as BedrockToolResultContentBlock,
+)
+from litellm.types.llms.bedrock import ToolSpecBlock as BedrockToolSpecBlock
+from litellm.types.llms.bedrock import ToolUseBlock as BedrockToolUseBlock
+
+
+def get_image_details(image_url) -> Tuple[str, str]:
+    try:
+        import base64
+
+        # Send a GET request to the image URL
+        response = requests.get(image_url)
+        response.raise_for_status()  # Raise an exception for HTTP errors
+
+        # Check the response's content type to ensure it is an image
+        content_type = response.headers.get("content-type")
+        if not content_type or "image" not in content_type:
+            raise ValueError(
+                f"URL does not point to a valid image (content-type: {content_type})"
+            )
+
+        # Convert the image content to base64 bytes
+        base64_bytes = base64.b64encode(response.content).decode("utf-8")
+
+        # Get mime-type
+        mime_type = content_type.split("/")[
+            1
+        ]  # Extract mime-type from content-type header
+
+        return base64_bytes, mime_type
+
+    except requests.RequestException as e:
+        raise Exception(f"Request failed: {e}")
+    except Exception as e:
+        raise e
+
+
+def _process_bedrock_converse_image_block(image_url: str) -> BedrockImageBlock:
+    if "base64" in image_url:
+        # Case 1: Images with base64 encoding
+        import base64
+        import re
+
+        # base 64 is passed as data:image/jpeg;base64,<base-64-encoded-image>
+        image_metadata, img_without_base_64 = image_url.split(",")
+
+        # read mime_type from img_without_base_64=data:image/jpeg;base64
+        # Extract MIME type using regular expression
+        mime_type_match = re.match(r"data:(.*?);base64", image_metadata)
+        if mime_type_match:
+            mime_type = mime_type_match.group(1)
+            image_format = mime_type.split("/")[1]
+        else:
+            mime_type = "image/jpeg"
+            image_format = "jpeg"
+        _blob = BedrockImageSourceBlock(bytes=img_without_base_64)
+        supported_image_formats = (
+            litellm.AmazonConverseConfig().get_supported_image_types()
+        )
+        if image_format in supported_image_formats:
+            return BedrockImageBlock(source=_blob, format=image_format)  # type: ignore
+        else:
+            # Handle the case when the image format is not supported
+            raise ValueError(
+                "Unsupported image format: {}. Supported formats: {}".format(
+                    image_format, supported_image_formats
+                )
+            )
+    elif "https:/" in image_url:
+        # Case 2: Images with direct links
+        image_bytes, image_format = get_image_details(image_url)
+        _blob = BedrockImageSourceBlock(bytes=image_bytes)
+        supported_image_formats = (
+            litellm.AmazonConverseConfig().get_supported_image_types()
+        )
+        if image_format in supported_image_formats:
+            return BedrockImageBlock(source=_blob, format=image_format)  # type: ignore
+        else:
+            # Handle the case when the image format is not supported
+            raise ValueError(
+                "Unsupported image format: {}. Supported formats: {}".format(
+                    image_format, supported_image_formats
+                )
+            )
+    else:
+        raise ValueError(
+            "Unsupported image type. Expected either image url or base64 encoded string - \
+                e.g. 'data:image/jpeg;base64,<base64-encoded-string>'"
+        )
+
+
+def _convert_to_bedrock_tool_call_invoke(
+    tool_calls: list,
+) -> List[BedrockContentBlock]:
+    """
+    OpenAI tool invokes:
+    {
+      "role": "assistant",
+      "content": null,
+      "tool_calls": [
+        {
+          "id": "call_abc123",
+          "type": "function",
+          "function": {
+            "name": "get_current_weather",
+            "arguments": "{\n\"location\": \"Boston, MA\"\n}"
+          }
+        }
+      ]
+    },
+    """
+    """
+    Bedrock tool invokes: 
+    [   
+        {
+            "role": "assistant",
+            "toolUse": {
+                "input": {"location": "Boston, MA", ..},
+                "name": "get_current_weather",
+                "toolUseId": "call_abc123"
+            }
+        }
+    ]
+    """
+    """
+    - json.loads argument
+    - extract name 
+    - extract id
+    """
+
+    try:
+        _parts_list: List[BedrockContentBlock] = []
+        for tool in tool_calls:
+            if "function" in tool:
+                id = tool["id"]
+                name = tool["function"].get("name", "")
+                arguments = tool["function"].get("arguments", "")
+                arguments_dict = json.loads(arguments)
+                bedrock_tool = BedrockToolUseBlock(
+                    input=arguments_dict, name=name, toolUseId=id
+                )
+                bedrock_content_block = BedrockContentBlock(toolUse=bedrock_tool)
+                _parts_list.append(bedrock_content_block)
+        return _parts_list
+    except Exception as e:
+        raise Exception(
+            "Unable to convert openai tool calls={} to bedrock tool calls. Received error={}".format(
+                tool_calls, str(e)
+            )
+        )
+
+
+def _convert_to_bedrock_tool_call_result(
+    message: dict,
+) -> BedrockMessageBlock:
+    """
+    OpenAI message with a tool result looks like:
+    {
+        "tool_call_id": "tool_1",
+        "role": "tool",
+        "name": "get_current_weather",
+        "content": "function result goes here",
+    },
+
+    OpenAI message with a function call result looks like:
+    {
+        "role": "function",
+        "name": "get_current_weather",
+        "content": "function result goes here",
+    }
+    """
+    """
+    Bedrock result looks like this: 
+    {
+        "role": "user",
+        "content": [
+            {
+                "toolResult": {
+                    "toolUseId": "tooluse_kZJMlvQmRJ6eAyJE5GIl7Q",
+                    "content": [
+                        {
+                            "json": {
+                                "song": "Elemental Hotel",
+                                "artist": "8 Storey Hike"
+                            }
+                        }
+                    ]
+                }
+            }
+        ]
+    }
+    """
+    """
+    - 
+    """
+    content = message.get("content", "")
+    name = message.get("name", "")
+    id = message.get("tool_call_id", str(uuid.uuid4()))
+
+    tool_result_content_block = BedrockToolResultContentBlock(text=content)
+    tool_result = BedrockToolResultBlock(
+        content=[tool_result_content_block],
+        toolUseId=id,
+    )
+    content_block = BedrockContentBlock(toolResult=tool_result)
+
+    return BedrockMessageBlock(role="user", content=[content_block])
+
+
+def _bedrock_converse_messages_pt(messages: List) -> List[BedrockMessageBlock]:
+    """
+    Converts given messages from OpenAI format to Bedrock format
+
+    - Roles must alternate b/w 'user' and 'model' (same as anthropic -> merge consecutive roles)
+    - Please ensure that function response turn comes immediately after a function call turn
+    """
+
+    contents: List[BedrockMessageBlock] = []
+    msg_i = 0
+    while msg_i < len(messages):
+        user_content: List[BedrockContentBlock] = []
+        init_msg_i = msg_i
+        ## MERGE CONSECUTIVE USER CONTENT ##
+        while msg_i < len(messages) and messages[msg_i]["role"] == "user":
+            if isinstance(messages[msg_i]["content"], list):
+                _parts: List[BedrockContentBlock] = []
+                for element in messages[msg_i]["content"]:
+                    if isinstance(element, dict):
+                        if element["type"] == "text":
+                            _part = BedrockContentBlock(text=element["text"])
+                            _parts.append(_part)
+                        elif element["type"] == "image_url":
+                            image_url = element["image_url"]["url"]
+                            _part = _process_bedrock_converse_image_block(  # type: ignore
+                                image_url=image_url
+                            )
+                            _parts.append(BedrockContentBlock(image=_part))  # type: ignore
+                user_content.extend(_parts)
+            else:
+                _part = BedrockContentBlock(text=messages[msg_i]["content"])
+                user_content.append(_part)
+
+            msg_i += 1
+
+        if user_content:
+            contents.append(BedrockMessageBlock(role="user", content=user_content))
+        assistant_content: List[BedrockContentBlock] = []
+        ## MERGE CONSECUTIVE ASSISTANT CONTENT ##
+        while msg_i < len(messages) and messages[msg_i]["role"] == "assistant":
+            if isinstance(messages[msg_i]["content"], list):
+                assistants_parts: List[BedrockContentBlock] = []
+                for element in messages[msg_i]["content"]:
+                    if isinstance(element, dict):
+                        if element["type"] == "text":
+                            assistants_part = BedrockContentBlock(text=element["text"])
+                            assistants_parts.append(assistants_part)
+                        elif element["type"] == "image_url":
+                            image_url = element["image_url"]["url"]
+                            assistants_part = _process_bedrock_converse_image_block(  # type: ignore
+                                image_url=image_url
+                            )
+                            assistants_parts.append(
+                                BedrockContentBlock(image=assistants_part)  # type: ignore
+                            )
+                assistant_content.extend(assistants_parts)
+            elif messages[msg_i].get(
+                "tool_calls", []
+            ):  # support assistant tool invoke convertion
+                assistant_content.extend(
+                    _convert_to_bedrock_tool_call_invoke(messages[msg_i]["tool_calls"])
+                )
+            else:
+                assistant_text = (
+                    messages[msg_i].get("content") or ""
+                )  # either string or none
+                if assistant_text:
+                    assistant_content.append(BedrockContentBlock(text=assistant_text))
+
+            msg_i += 1
+
+        if assistant_content:
+            contents.append(
+                BedrockMessageBlock(role="assistant", content=assistant_content)
+            )
+
+        ## APPEND TOOL CALL MESSAGES ##
+        if msg_i < len(messages) and messages[msg_i]["role"] == "tool":
+            tool_call_result = _convert_to_bedrock_tool_call_result(messages[msg_i])
+            contents.append(tool_call_result)
+            msg_i += 1
+        if msg_i == init_msg_i:  # prevent infinite loops
+            raise Exception(
+                "Invalid Message passed in - {}. File an issue https://github.com/BerriAI/litellm/issues".format(
+                    messages[msg_i]
+                )
+            )
+
+    return contents
+
+
+def _bedrock_tools_pt(tools: List) -> List[BedrockToolBlock]:
+    """
+    OpenAI tools looks like:
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_current_weather",
+                "description": "Get the current weather in a given location",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                    "location": {
+                        "type": "string",
+                        "description": "The city and state, e.g. San Francisco, CA",
+                    },
+                    "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
+                    },
+                    "required": ["location"],
+                },
+            }
+        }
+    ]
+    """
+    """
+    Bedrock toolConfig looks like: 
+    "tools": [
+        {
+            "toolSpec": {
+                "name": "top_song",
+                "description": "Get the most popular song played on a radio station.",
+                "inputSchema": {
+                    "json": {
+                        "type": "object",
+                        "properties": {
+                            "sign": {
+                                "type": "string",
+                                "description": "The call sign for the radio station for which you want the most popular song. Example calls signs are WZPZ, and WKRP."
+                            }
+                        },
+                        "required": [
+                            "sign"
+                        ]
+                    }
+                }
+            }
+        }
+    ]
+    """
+    tool_block_list: List[BedrockToolBlock] = []
+    for tool in tools:
+        parameters = tool.get("function", {}).get("parameters", None)
+        name = tool.get("function", {}).get("name", "")
+        description = tool.get("function", {}).get("description", "")
+        tool_input_schema = BedrockToolInputSchemaBlock(json=parameters)
+        tool_spec = BedrockToolSpecBlock(
+            inputSchema=tool_input_schema, name=name, description=description
+        )
+        tool_block = BedrockToolBlock(toolSpec=tool_spec)
+        tool_block_list.append(tool_block)
+
+    return tool_block_list
+
+
 # Function call template
 def function_call_prompt(messages: list, functions: list):
     function_prompt = """Produce JSON OUTPUT ONLY! Adhere to this format {"name": "function_name", "arguments":{"argument_name": "argument_value"}} The following functions are available to you:"""
@@ -1629,6 +2031,50 @@ def function_call_prompt(messages: list, functions: list):
         messages.append({"role": "system", "content": f"""{function_prompt}"""})
 
     return messages
+
+
+def response_schema_prompt(model: str, response_schema: dict) -> str:
+    """
+    Decides if a user-defined custom prompt or default needs to be used
+
+    Returns the prompt str that's passed to the model as a user message
+    """
+    custom_prompt_details: Optional[dict] = None
+    response_schema_as_message = [
+        {"role": "user", "content": "{}".format(response_schema)}
+    ]
+    if f"{model}/response_schema_prompt" in litellm.custom_prompt_dict:
+
+        custom_prompt_details = litellm.custom_prompt_dict[
+            f"{model}/response_schema_prompt"
+        ]  # allow user to define custom response schema prompt by model
+    elif "response_schema_prompt" in litellm.custom_prompt_dict:
+        custom_prompt_details = litellm.custom_prompt_dict["response_schema_prompt"]
+
+    if custom_prompt_details is not None:
+        return custom_prompt(
+            role_dict=custom_prompt_details["roles"],
+            initial_prompt_value=custom_prompt_details["initial_prompt_value"],
+            final_prompt_value=custom_prompt_details["final_prompt_value"],
+            messages=response_schema_as_message,
+        )
+    else:
+        return default_response_schema_prompt(response_schema=response_schema)
+
+
+def default_response_schema_prompt(response_schema: dict) -> str:
+    """
+    Used if provider/model doesn't support 'response_schema' param.
+
+    This is the default prompt. Allow user to override this with a custom_prompt.
+    """
+    prompt_str = """Use this JSON schema: 
+    ```json 
+    {}
+    ```""".format(
+        response_schema
+    )
+    return prompt_str
 
 
 # Custom prompt template
