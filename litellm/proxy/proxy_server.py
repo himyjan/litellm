@@ -292,6 +292,9 @@ from litellm.proxy.management_endpoints.model_management_endpoints import (
 from litellm.proxy.management_endpoints.model_management_endpoints import (
     router as model_management_router,
 )
+from litellm.proxy.management_endpoints.model_access_group_management_endpoints import (
+    router as model_access_group_management_router,
+)
 from litellm.proxy.management_endpoints.organization_endpoints import (
     router as organization_router,
 )
@@ -2569,11 +2572,11 @@ class ProxyConfig:
         litellm.credential_list = credential_list_dict
 
         ## NON-LLM CONFIGS eg. MCP tools, vector stores, etc.
-        self._init_non_llm_configs(config=config)
+        await self._init_non_llm_configs(config=config)
 
         return router, router.get_model_list(), general_settings
 
-    def _init_non_llm_configs(self, config: dict):
+    async def _init_non_llm_configs(self, config: dict):
         """
         Initialize non-LLM configs eg. MCP tools, vector stores, etc.
         """
@@ -2592,7 +2595,7 @@ class ProxyConfig:
             litellm_settings = config.get("litellm_settings", {})
             mcp_aliases = litellm_settings.get("mcp_aliases", None)
 
-            global_mcp_server_manager.load_servers_from_config(
+            await global_mcp_server_manager.load_servers_from_config(
                 mcp_servers_config, mcp_aliases
             )
 
@@ -10086,6 +10089,7 @@ app.include_router(openai_files_router)
 app.include_router(team_callback_router)
 app.include_router(budget_management_router)
 app.include_router(model_management_router)
+app.include_router(model_access_group_management_router)
 app.include_router(tag_management_router)
 app.include_router(cost_tracking_settings_router)
 app.include_router(router_settings_router)
